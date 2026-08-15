@@ -9,6 +9,8 @@ import { PIPELINE_STAGES, LEAD_SOURCES } from "@/lib/crm/types";
 export default function NewLeadPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [syncNote, setSyncNote] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     fullName: "",
     email: "",
@@ -36,6 +38,8 @@ export default function NewLeadPage() {
     if (!formData.fullName || !formData.email) return;
 
     setLoading(true);
+    setError(null);
+    setSyncNote(null);
     try {
       const res = await fetch("/api/leads", {
         method: "POST",
@@ -44,10 +48,22 @@ export default function NewLeadPage() {
       });
       const json = await res.json();
       if (json.success) {
-        router.push(`/leads/${json.lead.id}`);
+        // Surface the HubSpot sync result without blocking the local save.
+        if (json.hubspot?.configured && json.hubspot.ok) {
+          setSyncNote("Lead created and synced to HubSpot.");
+        } else if (json.hubspot?.configured) {
+          setSyncNote("Lead created locally. HubSpot sync failed — will retry on next edit.");
+        } else {
+          setSyncNote("Lead created (HubSpot not configured).");
+        }
+        // Brief pause so the status is visible before navigating.
+        setTimeout(() => router.push(`/leads/${json.lead.id}`), 900);
+      } else {
+        setError(json.error || "Failed to create lead.");
       }
-    } catch (error) {
-      console.error("Failed to create lead:", error);
+    } catch (err) {
+      console.error("Failed to create lead:", err);
+      setError("Network error — please try again.");
     } finally {
       setLoading(false);
     }
@@ -66,6 +82,18 @@ export default function NewLeadPage() {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
+        {/* Sync / error feedback */}
+        {error && (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            {error}
+          </div>
+        )}
+        {syncNote && (
+          <div className="rounded-lg border border-primary/30 bg-primary/10 px-4 py-3 text-sm text-primary">
+            {syncNote}
+          </div>
+        )}
+
         {/* Basic Info */}
         <div className="rounded-xl border border-border bg-surface p-5 md:p-6">
           <h2 className="text-lg font-semibold mb-4">Basic Information</h2>

@@ -2,6 +2,8 @@ import { db } from "@/db";
 import { leads, activities } from "@/db/schema";
 import { desc, eq, ilike, or, and } from "drizzle-orm";
 import { sql } from "drizzle-orm";
+import { syncLeadToHubSpot, isHubSpotConfigured } from "@/lib/integrations/hubspot";
+import { hubspotLabelForStage } from "@/lib/integrations/stage-map";
 
 export const dynamic = "force-dynamic";
 
@@ -105,9 +107,42 @@ export async function POST(request: Request) {
       leadId: newLead.id,
     });
 
+    // HubSpot sync — best-effort, never blocks the local CRM.
+    // Deduplicates by email: updates the contact if it already exists.
+    let hubspot: { configured: boolean; ok: boolean; detail?: string } = {
+      configured: isHubSpotConfigured(),
+      ok: false,
+    };
+    if (hubspot.configured && newLead.email) {
+      const result = await syncLeadToHubSpot(
+        {
+          fullName: newLead.fullName,
+          email: newLead.email,
+          phone: newLead.phone,
+          businessName: newLead.businessName,
+          businessWebsite: newLead.businessWebsite,
+          industry: newLead.industry,
+          companySize: newLead.companySize,
+          country: newLead.country,
+          biggestChallenge: newLead.biggestChallenge,
+          automationGoals: newLead.automationGoals,
+          budgetRange: newLead.budgetRange,
+          timeline: newLead.timeline,
+          leadScore: newLead.leadScore,
+          leadCategory: newLead.leadCategory,
+          source: newLead.source,
+        },
+        { dealStageLabel: hubspotLabelForStage(newLead.stage || "new") || "Prospecting" }
+      );
+      hubspot = { configured: true, ok: result.ok, detail: result.error };
+    } else if (!hubspot.configured) {
+      hubspot.detail = "HUBSPOT_ACCESS_TOKEN not configured";
+    }
+
     return Response.json({
       success: true,
       lead: newLead,
+      hubspot,
     });
   } catch (error) {
     console.error("Create lead error:", error);

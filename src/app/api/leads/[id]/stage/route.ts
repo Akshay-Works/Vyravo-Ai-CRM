@@ -1,6 +1,8 @@
 import { db } from "@/db";
 import { leads, activities } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { updateDealStageForEmail, isHubSpotConfigured } from "@/lib/integrations/hubspot";
+import { hubspotLabelForStage } from "@/lib/integrations/stage-map";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +25,7 @@ export async function PATCH(
 
     // Get current lead for activity logging
     const [currentLead] = await db
-      .select({ stage: leads.stage, fullName: leads.fullName })
+      .select({ stage: leads.stage, fullName: leads.fullName, email: leads.email })
       .from(leads)
       .where(eq(leads.id, leadId))
       .limit(1);
@@ -56,9 +58,27 @@ export async function PATCH(
       metadata: { previousStage, newStage: stage },
     });
 
+    // Move the associated HubSpot deal to the mapped stage (best-effort).
+    let hubspot: { configured: boolean; ok: boolean; detail?: string } = {
+      configured: isHubSpotConfigured(),
+      ok: false,
+    };
+    const targetLabel = hubspotLabelForStage(stage);
+    if (hubspot.configured && currentLead.email && targetLabel) {
+      const result = await updateDealStageForEmail(currentLead.email, [targetLabel]);
+      hubspot = {
+        configured: true,
+        ok: result.ok,
+        detail: result.error,
+      };
+    } else if (!hubspot.configured) {
+      hubspot.detail = "HUBSPOT_ACCESS_TOKEN not configured";
+    }
+
     return Response.json({
       success: true,
       lead: updatedLead,
+      hubspot,
     });
   } catch (error) {
     console.error("Update lead stage error:", error);
